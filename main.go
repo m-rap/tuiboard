@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"os"
+	"sync"
+	"time"
 
 	"github.com/gdamore/tcell/v3"
 )
@@ -28,6 +30,17 @@ var termInfoStrs = []string{"", ""}
 var mx, my int
 var drawChar = tcell.Key(0)
 var drawStr = ""
+var drawX, drawY = 0, 0
+var running = true
+
+type MyEv struct {
+	evType int
+	dt     int64
+}
+
+var tEvTimeout = int64(0)
+var myEvCh = make(chan MyEv)
+var wg = sync.WaitGroup{}
 
 func renderInfoStrs(scr tcell.Screen, yInfo *int, strs []string) {
 	for i := range strs {
@@ -39,9 +52,9 @@ func renderInfoStrs(scr tcell.Screen, yInfo *int, strs []string) {
 func renderBoard(scr tcell.Screen) {
 	//if drawChar == tcell.KeyDel || drawChar == 0 || drawStr == ""{
 	if drawStr == "" {
-		scr.PutStr(mx, my, " ")
+		scr.PutStr(drawX, drawY, " ")
 	} else {
-		scr.PutStr(mx, my, drawStr)
+		scr.PutStr(drawX, drawY, drawStr)
 	}
 }
 
@@ -54,6 +67,96 @@ func draw(scr tcell.Screen) {
 	renderInfoStrs(scr, &yInfo, termInfoStrs)
 	renderBoard(scr)
 	scr.Show()
+}
+
+func handleEv(scr tcell.Screen) {
+	for {
+		ev := <-scr.EventQ()
+
+		myEv := MyEv{
+			evType: 1,
+		}
+
+		switch ev := ev.(type) {
+		case *tcell.EventKey:
+			drawChar = ev.Key()
+			drawStr = ev.Str()
+			keyInfoStrs[0] = fmt.Sprintf("%04x", drawChar)
+			keyInfoStrs[1] = fmt.Sprintf("%d %s", len(drawStr), drawStr)
+			if drawChar == tcell.KeyEscape {
+				myEvCh <- MyEv{
+					evType: 2,
+				}
+				running = false
+				wg.Done()
+				return
+			}
+			myEvCh <- myEv
+		case *tcell.EventMouse:
+			mouseInfoStrs[0] = fmt.Sprintf("%04x %04x", ev.Buttons(), ev.Modifiers())
+			mx, my = ev.Position()
+			drawX, drawY = mx, my
+			mouseInfoStrs[1] = fmt.Sprintf("%d %d", mx, my)
+			myEvCh <- myEv
+		}
+
+	}
+}
+
+func resetStrInfo() {
+	//drawChar = tcell.Key(0)
+	//drawStr = ""
+	//keyInfoStrs[0] = fmt.Sprintf("%04x", drawChar)
+	//keyInfoStrs[1] = fmt.Sprintf("%d %s", len(drawStr), drawStr)
+	mouseInfoStrs[0] = fmt.Sprintf("%04x %04x", 0, 0)
+	mx, my = 0, 0
+	mouseInfoStrs[1] = fmt.Sprintf("%d %d", mx, my)
+}
+
+func drawNotifier() {
+	now := time.Now().UnixMilli()
+	prev := now
+	drawRemain := int64(25)
+	prevDraw := now
+	myEv := MyEv{
+		evType: 0,
+		dt:     0,
+	}
+	myEvCh <- myEv
+	for running {
+		now = time.Now().UnixMilli()
+		dt := now - prev
+		drawRemain -= dt
+		if drawRemain <= 0 {
+			myEv.dt = now - prevDraw
+			myEvCh <- myEv
+			prevDraw = now
+			drawRemain %= 25
+			drawRemain += 25
+		}
+		time.Sleep(1 * time.Millisecond)
+	}
+	wg.Done()
+}
+
+func drawListener(scr tcell.Screen) {
+	for myEv := range myEvCh {
+		switch myEv.evType {
+		case 0:
+			if tEvTimeout > 0 {
+				tEvTimeout -= myEv.dt
+				if tEvTimeout <= 0 {
+					resetStrInfo()
+				}
+			}
+			draw(scr)
+		case 1:
+			tEvTimeout = 500
+		case 2:
+			wg.Done()
+			return
+		}
+	}
 }
 
 func main() {
@@ -81,25 +184,15 @@ func main() {
 	draw(scr)
 	scr.ShowCursor(20, 20)
 
-	for {
-		ev := <-scr.EventQ()
+	wg.Add(1)
+	go handleEv(scr)
 
-		switch ev := ev.(type) {
-		case *tcell.EventKey:
-			drawChar = ev.Key()
-			drawStr = ev.Str()
-			keyInfoStrs[0] = fmt.Sprintf("%04x", drawChar)
-			keyInfoStrs[1] = fmt.Sprintf("%d %s", len(drawStr), drawStr)
-			if drawChar == tcell.KeyEscape {
-				scr.Fini()
-				return
-			}
-		case *tcell.EventMouse:
-			mouseInfoStrs[0] = fmt.Sprintf("%04x %04x", ev.Buttons(), ev.Modifiers())
-			mx, my = ev.Position()
-			mouseInfoStrs[1] = fmt.Sprintf("%d %d", mx, my)
-		}
+	wg.Add(1)
+	go drawNotifier()
 
-		draw(scr)
-	}
+	wg.Add(1)
+	go drawListener(scr)
+
+	wg.Wait()
+	scr.Fini()
 }
