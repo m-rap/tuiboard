@@ -29,12 +29,14 @@ var keyInfoStrs = []string{"", ""}
 var mouseInfoStrs = []string{"", ""}
 var termInfoStrs = []string{"", ""}
 var mouseX, mouseY int
-var charToDraw = tcell.Key(0)
-var strToDraw = ""
+var charToDraw = tcell.KeyRune
+var strToDraw = "#"
 var lastMouseX, lastMouseY = 0, 0
+var cursorX, cursorY = 0, 0
 var mouseEvCount = 0
 var mouseEvHist = []*tcell.EventMouse{}
 var running = true
+var drawMutex sync.Mutex
 
 const (
 	TbEvExit int = iota + 0
@@ -50,7 +52,8 @@ type TBoardEvent struct {
 }
 
 var tEvTimeout = int64(0)
-var tbEvCh = make(chan TBoardEvent)
+
+// var tbEvCh = make(chan TBoardEvent)
 var wg = sync.WaitGroup{}
 
 const (
@@ -93,7 +96,7 @@ func (l *Line) render(scr tcell.Screen) {
 			break
 		}
 		d := math.Sqrt(float64(dx*dx + dy*dy))
-		if d <= 1.5 {
+		if d < 1.0 {
 			break
 		}
 		fx += mx
@@ -124,16 +127,24 @@ func renderBoard(scr tcell.Screen) {
 	//	scr.PutStr(lastMouseX, lastMouseY, strToDraw)
 	//}
 	//line.render(scr)
-	scr.PutStr(2, 2, strToDraw)
+	scr.PutStr(2, 2, "clear")
+	scr.PutStr(2, 7, "apply")
+	scr.PutStr(10, 2, "char: "+strToDraw)
+	scr.PutStr(15, 2, strToDraw)
 	if editState == EditLineEnd {
-		scr.PutStr(3, 2, "*")
+		scr.PutStr(10, 2, "char: "+strToDraw+" *")
+	} else {
+		scr.PutStr(10, 2, "char: "+strToDraw)
 	}
+	drawMutex.Lock()
 	for _, l := range lines {
 		l.render(scr)
 	}
 	if lineToAdd != nil {
 		scr.PutStr(lineToAdd.x1, lineToAdd.y1, lineToAdd.c)
 	}
+	drawMutex.Unlock()
+	scr.ShowCursor(cursorX, cursorY)
 }
 
 func draw(scr tcell.Screen) {
@@ -187,30 +198,48 @@ func handleMouse(ev *tcell.EventMouse) {
 		histI--
 	}
 	if ev.Buttons()&tcell.Button1 > 0 {
-		switch editState {
-		case EditLineStart:
-			if mouseX < 5 && mouseY < 5 {
-				lines = []*Line{}
-				break
-			}
-			var tmpStr string
-			if strToDraw == "" {
-				tmpStr = "o"
+		isDrawArea := false
+		if mouseX < 10 {
+			if mouseY < 5 {
+				if editState == EditLineStart {
+					lines = []*Line{}
+				}
+			} else if mouseY >= 5 && mouseY < 10 {
+				switch editState {
+				case EditLineStart:
+					var tmpStr string
+					if strToDraw == "" {
+						tmpStr = "o"
+					} else {
+						tmpStr = strToDraw
+					}
+					drawMutex.Lock()
+					lineToAdd = &Line{
+						x1: cursorX,
+						y1: cursorY,
+						c:  tmpStr,
+					}
+					editState = EditLineEnd
+					drawMutex.Unlock()
+				case EditLineEnd:
+					drawMutex.Lock()
+					lineToAdd.x2 = cursorX
+					lineToAdd.y2 = cursorY
+					lines = append(lines, lineToAdd)
+					lineToAdd = nil
+					editState = EditLineStart
+					drawMutex.Unlock()
+				}
+
 			} else {
-				tmpStr = strToDraw
+				isDrawArea = true
 			}
-			lineToAdd = &Line{
-				x1: mouseX,
-				y1: mouseY,
-				c:  tmpStr,
-			}
-			editState = EditLineEnd
-		case EditLineEnd:
-			lineToAdd.x2 = mouseX
-			lineToAdd.y2 = mouseY
-			lines = append(lines, lineToAdd)
-			lineToAdd = nil
-			editState = EditLineStart
+		} else {
+			isDrawArea = true
+		}
+		if isDrawArea {
+			cursorX = mouseX
+			cursorY = mouseY
 		}
 	}
 }
@@ -219,26 +248,28 @@ func handleEv(scr tcell.Screen) {
 	for {
 		ev := <-scr.EventQ()
 
-		tbEv := TBoardEvent{}
+		//tbEv := TBoardEvent{}
 
 		switch ev := ev.(type) {
 		case *tcell.EventKey:
 			key := ev.Key()
 			if key == tcell.KeyEscape {
 				running = false
-				tbEv.evType = TbEvExit
-				tbEvCh <- tbEv
+				//tbEv.evType = TbEvExit
+				//tbEvCh <- tbEv
 				fmt.Println("wg.Done()")
 				wg.Done()
 				return
 			}
-			tbEv.evType = TbEvKey
-			tbEv.tcEv = ev
-			tbEvCh <- tbEv
+			//tbEv.evType = TbEvKey
+			//tbEv.tcEv = ev
+			//tbEvCh <- tbEv
+			handleKey(ev)
 		case *tcell.EventMouse:
-			tbEv.evType = TbEvMouse
-			tbEv.tcEv = ev
-			tbEvCh <- tbEv
+			//tbEv.evType = TbEvMouse
+			//tbEv.tcEv = ev
+			//tbEvCh <- tbEv
+			handleMouse(ev)
 		}
 
 	}
@@ -259,18 +290,27 @@ func drawNotifier(scr tcell.Screen) {
 	prev := now
 	drawRemain := int64(25)
 	prevDraw := now
-	tbEv := TBoardEvent{
-		evType: TbEvDraw,
-		dt:     0,
-	}
-	tbEvCh <- tbEv
+	//tbEv := TBoardEvent{
+	//	evType: TbEvDraw,
+	//	dt:     0,
+	//}
+	//tbEvCh <- tbEv
 	for running {
 		now = time.Now().UnixMilli()
 		dt := now - prev
 		drawRemain -= dt
 		if drawRemain <= 0 {
-			tbEv.dt = now - prevDraw
-			tbEvCh <- tbEv
+			//tbEv.dt = now - prevDraw
+			//tbEvCh <- tbEv
+			dt := now - prevDraw
+			if tEvTimeout > 0 {
+				//tEvTimeout -= tbEv.dt
+				tEvTimeout -= dt
+				if tEvTimeout <= 0 {
+					resetStrInfo()
+				}
+			}
+			draw(scr)
 			prevDraw = now
 			drawRemain %= 25
 			drawRemain += 25
@@ -282,32 +322,32 @@ func drawNotifier(scr tcell.Screen) {
 	wg.Done()
 }
 
-func drawListener(scr tcell.Screen) {
-	for tbEv := range tbEvCh {
-		switch tbEv.evType {
-		case TbEvDraw:
-			if tEvTimeout > 0 {
-				tEvTimeout -= tbEv.dt
-				if tEvTimeout <= 0 {
-					resetStrInfo()
-				}
-			}
-			draw(scr)
-		case TbEvKey:
-			tEvTimeout = 500
-			tcEv := tbEv.tcEv.(*tcell.EventKey)
-			handleKey(tcEv)
-		case TbEvMouse:
-			tEvTimeout = 500
-			tcEv := tbEv.tcEv.(*tcell.EventMouse)
-			handleMouse(tcEv)
-		case TbEvExit:
-			fmt.Println("wg.Done()")
-			wg.Done()
-			return
-		}
-	}
-}
+//func drawListener(scr tcell.Screen) {
+//	for tbEv := range tbEvCh {
+//		switch tbEv.evType {
+//		case TbEvDraw:
+//			if tEvTimeout > 0 {
+//				tEvTimeout -= tbEv.dt
+//				if tEvTimeout <= 0 {
+//					resetStrInfo()
+//				}
+//			}
+//			draw(scr)
+//		case TbEvKey:
+//			tEvTimeout = 500
+//			tcEv := tbEv.tcEv.(*tcell.EventKey)
+//			handleKey(tcEv)
+//		case TbEvMouse:
+//			tEvTimeout = 500
+//			tcEv := tbEv.tcEv.(*tcell.EventMouse)
+//			handleMouse(tcEv)
+//		case TbEvExit:
+//			fmt.Println("wg.Done()")
+//			wg.Done()
+//			return
+//		}
+//	}
+//}
 
 func main() {
 	fmt.Println("vim-go")
@@ -339,8 +379,8 @@ func main() {
 	wg.Add(1)
 	go drawNotifier(scr)
 
-	wg.Add(1)
-	go drawListener(scr)
+	//wg.Add(1)
+	//go drawListener(scr)
 
 	wg.Wait()
 }
