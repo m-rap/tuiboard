@@ -10,7 +10,7 @@ import (
 	"github.com/gdamore/tcell/v3"
 )
 
-func renderBorder(scr tcell.Screen) {
+func drawBorder(scr tcell.Screen) {
 	w, h := scr.Size()
 	for row := range h {
 		if row == 0 || row == h-1 {
@@ -75,7 +75,7 @@ type Line struct {
 	c              string
 }
 
-func (l *Line) render(scr tcell.Screen) {
+func (l *Line) draw(scr tcell.Screen) {
 	fx, fy := float32(l.x1), float32(l.y1)
 	mx := float32(l.x2 - l.x1)
 	my := float32(l.y2 - l.y1)
@@ -106,7 +106,7 @@ func (l *Line) render(scr tcell.Screen) {
 	}
 }
 
-func renderInfoStrs(scr tcell.Screen, yInfo *int, strs []string) {
+func drawInfoStrs(scr tcell.Screen, yInfo *int, strs []string) {
 	for i := range strs {
 		scr.PutStr(5, *yInfo, strs[i])
 		*yInfo++
@@ -119,14 +119,14 @@ var line = Line{
 	c: "o",
 }
 
-func renderBoard(scr tcell.Screen) {
+func drawBoard(scr tcell.Screen) {
 	////if charToDraw == tcell.KeyDel || charToDraw == 0 || strToDraw == ""{
 	//if strToDraw == "" {
 	//	scr.PutStr(lastMouseX, lastMouseY, " ")
 	//} else {
 	//	scr.PutStr(lastMouseX, lastMouseY, strToDraw)
 	//}
-	//line.render(scr)
+	//line.draw(scr)
 	scr.PutStr(2, 2, "clear")
 	scr.PutStr(2, 7, "apply")
 	scr.PutStr(10, 2, "char: "+strToDraw)
@@ -138,7 +138,7 @@ func renderBoard(scr tcell.Screen) {
 	}
 	drawMutex.Lock()
 	for _, l := range lines {
-		l.render(scr)
+		l.draw(scr)
 	}
 	if lineToAdd != nil {
 		scr.PutStr(lineToAdd.x1, lineToAdd.y1, lineToAdd.c)
@@ -147,13 +147,13 @@ func renderBoard(scr tcell.Screen) {
 	scr.ShowCursor(cursorX, cursorY)
 }
 
-func draw(scr tcell.Screen) {
+func drawIter(scr tcell.Screen) {
 	scr.Clear()
-	renderBorder(scr)
+	drawBorder(scr)
 	//yInfo := 6
-	//renderInfoStrs(scr, &yInfo, keyInfoStrs)
-	//renderInfoStrs(scr, &yInfo, mouseInfoStrs)
-	//renderInfoStrs(scr, &yInfo, termInfoStrs)
+	//drawInfoStrs(scr, &yInfo, keyInfoStrs)
+	//drawInfoStrs(scr, &yInfo, mouseInfoStrs)
+	//drawInfoStrs(scr, &yInfo, termInfoStrs)
 
 	//tmp := fmt.Sprintf("lines %d", len(lines))
 	//scr.PutStr(5, yInfo, tmp)
@@ -164,7 +164,7 @@ func draw(scr tcell.Screen) {
 	//	yInfo++
 	//}
 
-	renderBoard(scr)
+	drawBoard(scr)
 	scr.Show()
 }
 
@@ -310,7 +310,7 @@ func drawNotifier(scr tcell.Screen) {
 					resetStrInfo()
 				}
 			}
-			draw(scr)
+			drawIter(scr)
 			prevDraw = now
 			drawRemain %= 25
 			drawRemain += 25
@@ -332,7 +332,7 @@ func drawNotifier(scr tcell.Screen) {
 //					resetStrInfo()
 //				}
 //			}
-//			draw(scr)
+//			drawIter(scr)
 //		case TbEvKey:
 //			tEvTimeout = 500
 //			tcEv := tbEv.tcEv.(*tcell.EventKey)
@@ -367,10 +367,10 @@ func main() {
 	//scr.DisablePaste()
 
 	resetStrInfo()
-	draw(scr)
+	drawIter(scr)
 	//scr.Beep()
 	termInfoStrs[0], termInfoStrs[1] = scr.Terminal()
-	draw(scr)
+	drawIter(scr)
 	//scr.ShowCursor(20, 20)
 
 	wg.Add(1)
