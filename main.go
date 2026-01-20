@@ -10,8 +10,10 @@ import (
 	"github.com/gdamore/tcell/v3"
 )
 
-func drawBorder(scr tcell.Screen) {
-	w, h := scr.Size()
+var scr *DoubleBufferScreen
+
+func drawBorder() {
+	w, h := scr.CheckSize()
 	for row := range h {
 		if row == 0 || row == h-1 {
 			for col := range w {
@@ -37,6 +39,18 @@ var mouseEvCount = 0
 var mouseEvHist = []*tcell.EventMouse{}
 var running = true
 var drawMutex sync.Mutex
+var logFile *os.File = nil
+
+func logToFile(str string) {
+	if logFile == nil {
+		var err error
+		logFile, err = os.Create("main.log")
+		if err != nil {
+			return
+		}
+	}
+	logFile.WriteString(str)
+}
 
 const (
 	TbEvExit int = iota + 0
@@ -75,7 +89,7 @@ type Line struct {
 	c              string
 }
 
-func (l *Line) draw(scr tcell.Screen) {
+func (l *Line) draw() {
 	fx, fy := float32(l.x1), float32(l.y1)
 	mx := float32(l.x2 - l.x1)
 	my := float32(l.y2 - l.y1)
@@ -106,7 +120,7 @@ func (l *Line) draw(scr tcell.Screen) {
 	}
 }
 
-func drawInfoStrs(scr tcell.Screen, yInfo *int, strs []string) {
+func drawInfoStrs(yInfo *int, strs []string) {
 	for i := range strs {
 		scr.PutStr(5, *yInfo, strs[i])
 		*yInfo++
@@ -119,7 +133,7 @@ var line = Line{
 	c: "o",
 }
 
-func drawBoard(scr tcell.Screen) {
+func drawBoard() {
 	////if charToDraw == tcell.KeyDel || charToDraw == 0 || strToDraw == ""{
 	//if strToDraw == "" {
 	//	scr.PutStr(lastMouseX, lastMouseY, " ")
@@ -138,22 +152,23 @@ func drawBoard(scr tcell.Screen) {
 	}
 	drawMutex.Lock()
 	for _, l := range lines {
-		l.draw(scr)
+		l.draw()
 	}
 	if lineToAdd != nil {
 		scr.PutStr(lineToAdd.x1, lineToAdd.y1, lineToAdd.c)
 	}
 	drawMutex.Unlock()
-	scr.ShowCursor(cursorX, cursorY)
+	scr.Scr.ShowCursor(cursorX, cursorY)
 }
 
-func drawIter(scr tcell.Screen) {
+func drawIter() {
+	scr.CheckSize()
 	scr.Clear()
-	drawBorder(scr)
+	//drawBorder()
 	//yInfo := 6
-	//drawInfoStrs(scr, &yInfo, keyInfoStrs)
-	//drawInfoStrs(scr, &yInfo, mouseInfoStrs)
-	//drawInfoStrs(scr, &yInfo, termInfoStrs)
+	//drawInfoStrs(&yInfo, keyInfoStrs)
+	//drawInfoStrs(&yInfo, mouseInfoStrs)
+	//drawInfoStrs(&yInfo, termInfoStrs)
 
 	//tmp := fmt.Sprintf("lines %d", len(lines))
 	//scr.PutStr(5, yInfo, tmp)
@@ -164,8 +179,10 @@ func drawIter(scr tcell.Screen) {
 	//	yInfo++
 	//}
 
-	drawBoard(scr)
-	scr.Show()
+	drawBoard()
+	scr.Draw()
+	scr.Scr.Show()
+	scr.SwapBuffer()
 }
 
 func handleKey(ev *tcell.EventKey) {
@@ -244,9 +261,9 @@ func handleMouse(ev *tcell.EventMouse) {
 	}
 }
 
-func handleEv(scr tcell.Screen) {
+func handleEv() {
 	for {
-		ev := <-scr.EventQ()
+		ev := <-scr.Scr.EventQ()
 
 		//tbEv := TBoardEvent{}
 
@@ -285,7 +302,7 @@ func resetStrInfo() {
 	mouseInfoStrs[1] = fmt.Sprintf("%d %d", mouseX, mouseY)
 }
 
-func drawNotifier(scr tcell.Screen) {
+func drawNotifier() {
 	now := time.Now().UnixMilli()
 	prev := now
 	drawRemain := int64(25)
@@ -310,77 +327,49 @@ func drawNotifier(scr tcell.Screen) {
 					resetStrInfo()
 				}
 			}
-			drawIter(scr)
+			drawIter()
 			prevDraw = now
 			drawRemain %= 25
 			drawRemain += 25
 		}
 		time.Sleep(1 * time.Millisecond)
 	}
-	scr.Fini()
+	scr.Scr.Fini()
 	fmt.Println("wg.Done()")
 	wg.Done()
 }
 
-//func drawListener(scr tcell.Screen) {
-//	for tbEv := range tbEvCh {
-//		switch tbEv.evType {
-//		case TbEvDraw:
-//			if tEvTimeout > 0 {
-//				tEvTimeout -= tbEv.dt
-//				if tEvTimeout <= 0 {
-//					resetStrInfo()
-//				}
-//			}
-//			drawIter(scr)
-//		case TbEvKey:
-//			tEvTimeout = 500
-//			tcEv := tbEv.tcEv.(*tcell.EventKey)
-//			handleKey(tcEv)
-//		case TbEvMouse:
-//			tEvTimeout = 500
-//			tcEv := tbEv.tcEv.(*tcell.EventMouse)
-//			handleMouse(tcEv)
-//		case TbEvExit:
-//			fmt.Println("wg.Done()")
-//			wg.Done()
-//			return
-//		}
-//	}
-//}
-
 func main() {
 	fmt.Println("vim-go")
-	scr, err := tcell.NewScreen()
+	var err error
+	scr, err = NewDoubleBufferScreen()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%s\n", err.Error())
-	}
-	err = scr.Init()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "%s\n", err.Error())
+		return
 	}
 
-	scr.EnableMouse()
+	scr.Scr.EnableMouse()
 	//scr.EnableMouse(tcell.MouseMotionEvents | tcell.MouseButtonEvents)
 	//scr.EnableMouse(tcell.MouseMotionEvents)
 	//scr.EnableMouse(tcell.MouseButtonEvents)
 	//scr.DisablePaste()
 
 	resetStrInfo()
-	drawIter(scr)
+	drawIter()
 	//scr.Beep()
-	termInfoStrs[0], termInfoStrs[1] = scr.Terminal()
-	drawIter(scr)
+	termInfoStrs[0], termInfoStrs[1] = scr.Scr.Terminal()
+	drawIter()
 	//scr.ShowCursor(20, 20)
 
 	wg.Add(1)
-	go handleEv(scr)
+	go handleEv()
 
 	wg.Add(1)
-	go drawNotifier(scr)
-
-	//wg.Add(1)
-	//go drawListener(scr)
+	go drawNotifier()
 
 	wg.Wait()
+
+	if logFile != nil {
+		logFile.Close()
+	}
 }
